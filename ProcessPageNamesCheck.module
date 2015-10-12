@@ -1,0 +1,159 @@
+<?php
+/**
+ * Page Name Check (0.0.1)
+ * Lists all pages where the name differs from the sanitized title.
+ *
+ * @author Rupert Dunk
+ *
+ * ProcessWire 2.x
+ * Copyright (C) 2011 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ * http://www.ryancramer.com
+ *
+ */
+
+class ProcessPageNamesCheck extends Process implements ConfigurableModule {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => "Page Names Check",
+			'version' => "0.0.1",
+			'summary' => "Lists all pages where the name differs from the sanitized title.",
+			'author' => "Rupert Dunk",
+			'href' => "https://github.com/rdunk/PageNamesCheck",
+			'autoload' => false,
+			'singular' => false,
+			'permanent' => false
+		);
+	}
+
+	public static function getDefaultData() {
+		$selectors  = "has_parent!=2"; //exclude admin subpages
+		$selectors .= ",id!=2|7|27"; // exclude admin, trash and 404 pages respectively
+		$selectors .= ",status<".Page::statusTrash; //exclude trash
+		$selectors .= ",include=all"; //include all
+		return array(
+			"selectors" => $selectors
+		);
+	}
+
+	public function __construct() {
+	   foreach(self::getDefaultData() as $key => $value) {
+			$this->$key = $value;
+		}
+	}
+
+	public function init() {
+		// parent::init(); //uncomment if CSS/JS needed later
+	}
+
+	public function ___execute() {
+		//check for POST data and changes
+		$this->checkChanges($this->changeNames($this->input->post));
+
+		//use default selector string if configurable field is blank
+		$selectors = (strlen($this->selectors) ? $this->selectors : $this->getDefaultData()['selectors']);
+
+		//build table
+		$table = $this->modules->get("MarkupAdminDataTable");
+		$table->setEncodeEntities(false);
+		$table->headerRow(array('Page Title','Page Name','New Page Name','Change?'));
+
+		foreach ($this->pages->find($selectors)->sort('title') as $p) {
+			$name = $this->sanitizer->pageName($p->title, true);
+			if ( ($name != $p->name) && (substr($name, 0, strlen($p->name)) !== $p->name) ) {
+				$table->row(array(
+					$p->title => "{$this->config->urls->admin}page/edit/?id={$p->id}",
+					$p->name,
+					"<input size='50' type='text' name='{$p->id}' value='$name' />",
+					"<input type='checkbox' name='check[]' value='{$p->id}' />",
+				));
+			}
+		}
+
+		//build button
+		$button = $this->modules->get("InputfieldButton");
+		$button->type = 'submit';
+		$button->id = 'apply_changes';
+		$button->value = 'Apply Changes';
+
+		return "<form id='pages-form' action='./' method='post'>" . $table->render() . $button->render() . "</form>";
+	}
+
+	protected function checkChanges($changes) {
+		$count = count($changes);
+		if ($count) {
+			$this->message ($count . " change(s) were made.");
+			foreach ($changes as $message) {
+				$this->message($message);
+			}
+		}
+	}
+
+	protected function changeNames($data) {
+		$output = array();
+		foreach ($data->check as $id) {
+			$pageToEdit = $this->pages->get($id);
+			$title = $pageToEdit->title;
+			$oldname = $pageToEdit->name;
+			$newname = $data[$id];
+			$out = $title . ' : "' . $oldname . '" &rarr; "' . $newname . '"';
+			$output[] = $out;
+
+			$pageToEdit->name = $newname;
+			$pageToEdit->save();
+		}
+		return $output;
+	}
+
+	protected function getInstalledPage() {
+
+		$admin = $this->pages->get($this->config->adminRootPageID);
+		$parent = $admin->child("name=setup");
+		$page = $parent->child("name=page-names-check");
+
+		if(!$page->id) {
+			$page = new Page();
+			$page->parent = $parent;
+			$page->template = $this->templates->get('admin');
+			$page->name = "page-names-check";
+			$page->title = "Page Names Check";
+			$page->process = $this;
+			$page->save();
+		}
+
+		return $page;
+	}
+
+	public function ___install() {
+		$page = $this->getInstalledPage();
+		$this->message("Page check added to {$page->path}");
+	}
+
+	public function ___uninstall() {
+		$page = $this->getInstalledPage();
+		if($page->id) {
+			$this->message("Removed {$page->path}");
+			$this->pages->delete($page);
+		}
+	}
+
+	static public function getModuleConfigInputfields(array $data) {
+		$inputfields = new InputfieldWrapper();
+
+		$modules = wire('modules');
+		$f = $modules->get("InputfieldText");
+		$f->name = 'selectors';
+		$f->label = 'Custom Selectors';
+		$f->description = 'Use this field to input a custom selector string, leave blank to use the default shown below.';
+		$f->notes = "Default: has_parent!=2,id!=2|7|27,status<".Page::statusTrash.",include=all";
+		$f->value = $data['selectors'];
+		$inputfields->add($f);
+
+		return $inputfields;
+
+	}
+
+}
